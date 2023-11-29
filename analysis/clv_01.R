@@ -1,127 +1,149 @@
-# libraries ---- 
+# Librerías ---- 
 library(tidyverse)
 library(tidymodels)
 library(styleBreton)
 
 
-# data acquisition ----
+# Adquisición de Datos ----
 dt_00 <- 
   read_csv("data/cdnow.csv") |> 
   select(-1)
 
-
+# verificación de NAs
 dt_00 |> 
   map_df(\(x) sum(is.na(x)))
 
+# número de clientes únicos
 dt_00 |> 
   distinct(customer_id) |> 
   nrow()
 
-# cohort analysis ----
+
+# Análisis de compra ----
 # customers that joined at the specific business day
 
-# first purchase of each customer
+# primera compra de cada cliente
 first_purchase <- 
   dt_00 |> 
-  group_by(customer_id) |> 
   arrange(customer_id, date) |> 
+  group_by(customer_id) |>
   slice_head(n = 1) |> 
   ungroup()
 
-# date of first purchase  
+# fecha de primera compra 
 first_purchase |> 
   (\(x) min(x$date))()
 
-# date of last first purchase  
+# fecha de la primera compra más tardía  
 first_purchase |> 
   (\(x) max(x$date))()
 
 
-# month visualization
+# visualización de compras por mes
 dt_00 |> 
   group_by(month = floor_date(date, "month")) |> 
   summarize(monthly_sale = sum(price)) |> 
   ggplot(aes(x = month, y = monthly_sale)) +
   geom_line(linewidth = 1,
             color = "steelblue") +
-  labs(title = "Sales by Month",
-       subtitle = "Aggregated amount in thounsands",
-       y = "Amount (000)",
-       x = "Date",
-       caption = "Juan L.Bretón, PMP") +
+  labs(title = "Compras Por Mes",
+       subtitle = "Cantidad agregada (en miles)",
+       y = "Cantidad (000)",
+       x = "Mes",
+       caption = "Fuente: CDNOW data <br>
+       Modelaje y visualización: Juan L.Bretón, PMP") +
   theme_breton() +
   scale_y_continuous(labels = scales::dollar_format(scale = 1/1000)) +
   scale_x_date(date_breaks = "1 month",
                date_labels = "%m\n%y")
 
 
-# purchasing behavior
-
-# sample of customers
-set.seed(3342)
+# comportamiento individual de compra
+# muestra de clientes
+set.seed(3352)
 cust_samp <- 
-  # sample(dt_00$customer_id, 10)
-  c(1:10)
+  sample(dt_00$customer_id, 12)
+  # c(1:10)
 
+# visualización del comportamiento individual
+# acumula precio por cliente y fecha
 dt_00 |> 
   filter(customer_id %in% cust_samp) |> 
-  group_by(customer_id) |> 
-  arrange(customer_id, date) |> 
-  ggplot(aes(x = date, y = price, group = customer_id)) +
+  group_by(customer_id, date) |> 
+  summarize(across(.cols = c(quantity, price),
+                   .fns = sum,
+                   .names = "acum_{.col}"),
+            .groups = "drop") |>
+  ggplot(aes(x = date, y = acum_price, group = customer_id)) +
   geom_line(color = "steelblue") +
   geom_point(color = "steelblue") +
   facet_wrap(~ customer_id) +
   theme_breton() +
-  labs(title = "Purchasing Behavior",
-       subtitle = "Purchases by customer",
-       y = "Amount",
-       x = "Date",
-       caption = "Juan L. Bretón, PMP") +
+  labs(title = "Comportamiento Individual de Compra",
+       subtitle = "Número de compras por cliente",
+       y = "Cantidad gastada por día",
+       x = "Fecha",
+       caption = "Fuente: CDNOW data <br>
+       Modelaje y visualización: Juan L.Bretón, PMP") +
   scale_y_continuous(labels = scales::dollar_format()) +
   scale_x_date(date_breaks = "3 month",
                date_labels = "%m\n%y")
 
 
-# feature engineering ----
 
-# purchasing period
+# Ingeniería de Características ----
+# los últimos 90 días serán el periodo de análisis
+
+# longitud del perido de análisis
 num_days <- 90
 
-# cutoff day
+# fecha de corte
 cutoff <- 
   dt_00 |> 
-  (\(x) max(x$date))() - 90
+  (\(x) max(x$date))() - num_days
 
-# in-dataset
+# data en periodo
 dt_in <- 
   dt_00 |> 
   filter(date <= cutoff)
 
-# after-dataset
+# data después de periodo
 dt_out <- 
   dt_00 |> 
   filter(date > cutoff)
 
 
-# feature engineering
+# generación de características
 
-# target
+# respuestas
+# clientes que hicieron una compra en los últimos 90 días
+# solo queda una proporción pequeña de todos los clientes
+
+# dataset de objetivos
 dt_targets <- 
   dt_out |> 
   group_by(customer_id) |> 
-  summarize(spend_90_total = sum(price)) |> 
+  summarize(spend_90_total = sum(price),
+            .groups = "drop") |> 
   mutate(spend_90_flag = 1)
 
-# recency
+
+# predictores
+# clientes que no hicieron compra en los últimos 90 días
+
+# dataset de compra reciente
+# hace cuántos días fue su compra más reciente
 dt_recency <- 
   dt_in |> 
   group_by(customer_id) |> 
   slice_max(order_by = date, n = 1, with_ties = FALSE) |> 
   ungroup() |> 
-  mutate(recency = as.numeric(date - dt_00 |> (\(x) max(x$date))())) |> 
+  mutate(recency = as.numeric(date - dt_in |> (\(x) max(x$date))())) |> 
   select(customer_id, recency)
 
-# frequency
+
+# dataset de frecuencia de compras
+# cuenta de compras por cliente
 dt_frequency <- 
   dt_in |> 
   group_by(customer_id) |> 
@@ -129,22 +151,25 @@ dt_frequency <-
   ungroup() |> 
   select(customer_id, frequency = n)
 
+
+# dataset de cantidad gastada
 # price
 dt_price <- 
   dt_in |> 
   group_by(customer_id) |> 
-  summarize(price_sum = sum(price),
-            price_mean = mean(price),
-            .groups = "drop")
+  summarize(across(.cols = price,
+                   .fns = list(sum = sum, 
+                               mean = mean),
+                   .names = "{.col}_{.fn}"))
 
-# dataset of features
+# integración de dataset de features
 dt_features <- 
   dt_recency |> 
   add_column(dt_frequency |> select(frequency)) |> 
   add_column(dt_price |> select(starts_with("price")))
 
 
-# join to targets
+# integración con dataset de targets
 dt_01 <- 
   dt_features |> 
   left_join(dt_targets, 
@@ -153,27 +178,32 @@ dt_01 <-
                   spend_90_flag = 0)) 
 
 
-# regression ----
-# what will customers spend in the next 90-day period? --regression
+# Regresión Machine Learning ----
+# cuánto gastarán los clientes en el siguiente periodo de 90 días?
 
 ## train / test split
 set.seed(443)
 clv_spend_split <- 
-  initial_split(dt_01, strata = spend_90_total)
+  initial_split(dt_01, 
+                strata = spend_90_total)
 
+# dataset de entrenamiento
 clv_spend_train <- 
   clv_spend_split |> 
   training()
 
+# dataset de prueba
 clv_spend_test <- 
   clv_spend_split |> 
   testing()
 
-# recipe
+# receta de preprocesamiento
 clv_spend_recipe <- 
   recipe(spend_90_total ~ ., data = clv_spend_train) |> 
   update_role(customer_id, new_role = "id") |> 
-  update_role(spend_90_flag, new_role = "intent")
+  update_role(spend_90_flag, new_role = "intent") |> 
+  step_normalize(all_numeric_predictors())
+
 
 # cross validation
 set.seed(332)
@@ -190,6 +220,7 @@ clv_spend_xgb_spec <-
              learn_rate = tune()) |> 
   set_engine("xgboost") |> 
   set_mode("regression")
+
 
 # workflow
 clv_spend_wf <- 
@@ -213,31 +244,44 @@ clv_spend_fit <-
   finalize_workflow(select_best(clv_spend_tuned, "rmse")) |> 
   last_fit(clv_spend_split)
 
+# metricas del final fit
 clv_spend_fit |> 
   collect_metrics()
 
-# extract trained model
+# extracción del modelo entrenado
 clv_spend_model <- 
   extract_workflow(clv_spend_fit)
 
-# prediction
+# predicción con nuevos datos
 new <- 
   dt_01 |> 
   slice_sample(n = 5)
 
 predict(clv_spend_model, new_data = new)
 
-# importance
+
+# importancia de variables
 clv_spend_fit |> 
   extract_fit_parsnip() |> 
-  vip::vip()
+  vip::vi() |> 
+  ggplot(aes(x = Importance, 
+             y = fct_reorder(Variable, Importance))) +
+  geom_col(alpha = 0.65, 
+           fill = "darkgreen") +
+  labs(title = "Variables Relacionadas con la Cantidad Gastada",
+       subtitle = "Modelo XG Boost Regresión",
+       x = "Importancia",
+       y = NULL,
+       caption = "Fuente: CDNOW data <br>
+       Modelaje y visualización: Juan L.Bretón, PMP") +
+  theme_breton()
 
 
 
-# classification ----
-# probability of a customer to make a purchase in the next 90-d period
+# Clasificación Machine Learning ----
+# probabilidad de que un cliente haga una compra en el siguiente periodo
 
-# convert target to factor
+# convertir la variable de respuesta a factor
 dt_02 <- 
   dt_01 |> 
   mutate(spend_90_flag = as_factor(spend_90_flag))
@@ -249,21 +293,24 @@ clv_class_split <-
   initial_split(dt_02, 
                 strata = spend_90_flag)
 
+# dataset de entrenamiento
 clv_class_train <- 
   clv_class_split |> 
   training()
 
+# dataset de prueba
 clv_class_test <- 
   clv_class_split |> 
   testing()
 
 
-# recipe
+# receta de preprocesamiento
 clv_class_recipe <- 
   recipe(spend_90_flag ~ ., 
          data = clv_class_train) |> 
   update_role(customer_id, new_role = "id") |> 
-  update_role(spend_90_total, new_role = "intent")
+  update_role(spend_90_total, new_role = "intent") |> 
+  step_normalize(all_numeric_predictors())
 
 
 # cross validation
@@ -281,6 +328,7 @@ clv_class_xgb_spec <-
              learn_rate = tune()) |> 
   set_engine("xgboost") |> 
   set_mode("classification")
+
 
 # workflow
 clv_class_wf <- 
@@ -304,14 +352,15 @@ clv_class_fit <-
   finalize_workflow(select_best(clv_class_tuned, "roc_auc")) |> 
   last_fit(clv_class_split)
 
+# métricas del final fit
 clv_class_fit |> 
   collect_metrics()
 
-# extract trained model
+# extracción del modelo entrenado
 clv_class_model <- 
   extract_workflow(clv_class_fit)
 
-# prediction
+# predicción en nuevos datos
 new <- 
   dt_01 |> 
   slice_sample(n = 5)
@@ -322,13 +371,24 @@ predict(clv_class_model, new_data = new, type = "prob")
 # importance
 clv_class_fit |> 
   extract_fit_parsnip() |> 
-  vip::vip()
+  vip::vi() |> 
+  ggplot(aes(x = Importance, 
+             y = fct_reorder(Variable, Importance))) +
+  geom_col(alpha = 0.65, 
+           fill = "darkgreen") +
+  labs(title = "Variables Relacionadas con la Probabilidad de Comprar",
+       subtitle = "Modelo XG Boost Clasificación",
+       x = "Importancia",
+       y = NULL,
+       caption = "Fuente: CDNOW data <br>
+       Modelaje y visualización: Juan L.Bretón, PMP") +
+  theme_breton()
 
 
 
-# prep for production ----
+# Preparación para Producción ----
 
-# prediction
+# predicción en todos los clientes
 dt_predictions <- 
   predict(clv_spend_model, 
         new_data = dt_01) |> 
@@ -342,31 +402,37 @@ dt_predictions <-
          pred_amount = .pred,
          prob_purchase = .pred_1,
          recency, frequency, price_sum, price_mean, 
-         spend_90_total, spend_90_flag)
+         spend_90_total, spend_90_flag) |> 
+  mutate(difer = spend_90_total - pred_amount)
 
 
+# visualización de la predicción de todos los clientes
 dt_predictions |> 
-  ggplot(aes(x = frequency, y = prob_purchase)) +
+  ggplot(aes(x = frequency, 
+             y = prob_purchase, 
+             color = difer)) +
   geom_point(alpha = 0.25)
 
 
-# customers with highest probability to spend in the next 90-day period
+# clientes con la más alta probabilidad de comprar en los
+# siguientes 90 días
 dt_predictions |> 
   arrange(desc(prob_purchase))
 
 
-# customers that recently purchased but unlikely to buy
+# clientes que han comprado recientemente pero que tienen
+# pocas probabilidades de volver a comprar
 dt_predictions |> 
-  filter(recency > -120 & prob_purchase < 0.4) |> 
+  filter(recency > -100 & prob_purchase < 0.4) |> 
   arrange(prob_purchase) 
 
 dt_predictions |> 
   summary(prob_purchase)
 
-# missed oportunities
+# clientes con alta cantidad pero que no han hecho compra
 dt_predictions |> 
   filter(spend_90_total == 0) |> 
-  arrange(-prob_purchase)
+  arrange(-pred_amount)
 
 
 
