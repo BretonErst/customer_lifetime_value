@@ -1,3 +1,10 @@
+###############################################
+##                                           ##
+##            JUAN L. BRETON, PMP            ##
+##                                           ##
+###############################################
+
+
 # Librerías ---- 
 library(tidyverse)
 library(tidymodels)
@@ -63,7 +70,7 @@ dt_00 |>
 set.seed(3352)
 cust_samp <- 
   sample(dt_00$customer_id, 12)
-  # c(1:10)
+  # c(1:12)
 
 # visualización del comportamiento individual
 # acumula precio por cliente y fecha
@@ -115,7 +122,7 @@ dt_out <-
 
 # generación de características
 
-# respuestas
+# variables de respuesta
 # clientes que hicieron una compra en los últimos 90 días
 # solo queda una proporción pequeña de todos los clientes
 
@@ -128,7 +135,8 @@ dt_targets <-
   mutate(spend_90_flag = 1)
 
 
-# predictores
+
+# variables predictoras
 # clientes que no hicieron compra en los últimos 90 días
 
 # dataset de compra reciente
@@ -162,13 +170,16 @@ dt_price <-
                                mean = mean),
                    .names = "{.col}_{.fn}"))
 
-# integración de dataset de features
+# agreagación de dataset de features
 dt_features <- 
   dt_recency |> 
-  add_column(dt_frequency |> select(frequency)) |> 
-  add_column(dt_price |> select(starts_with("price")))
+  add_column(dt_frequency |> 
+               select(frequency)) |> 
+  add_column(dt_price |> 
+               select(starts_with("price")))
 
 
+# dataset listo para modelaje
 # integración con dataset de targets
 dt_01 <- 
   dt_features |> 
@@ -178,11 +189,12 @@ dt_01 <-
                   spend_90_flag = 0)) 
 
 
+
 # Regresión Machine Learning ----
 # cuánto gastarán los clientes en el siguiente periodo de 90 días?
 
 ## train / test split
-set.seed(443)
+set.seed(3443)
 clv_spend_split <- 
   initial_split(dt_01, 
                 strata = spend_90_total)
@@ -197,16 +209,18 @@ clv_spend_test <-
   clv_spend_split |> 
   testing()
 
+
 # receta de preprocesamiento
 clv_spend_recipe <- 
-  recipe(spend_90_total ~ ., data = clv_spend_train) |> 
+  recipe(spend_90_total ~ ., 
+         data = clv_spend_train) |> 
   update_role(customer_id, new_role = "id") |> 
   update_role(spend_90_flag, new_role = "intent") |> 
-  step_normalize(all_numeric_predictors())
+  step_scale(all_numeric_predictors())
 
 
 # cross validation
-set.seed(332)
+set.seed(2332)
 clv_spend_folds <- 
   vfold_cv(clv_spend_train, 
            strata = spend_90_total)
@@ -244,7 +258,7 @@ clv_spend_fit <-
   finalize_workflow(select_best(clv_spend_tuned, "rmse")) |> 
   last_fit(clv_spend_split)
 
-# metricas del final fit
+# métricas del final fit
 clv_spend_fit |> 
   collect_metrics()
 
@@ -268,7 +282,7 @@ clv_spend_fit |>
              y = fct_reorder(Variable, Importance))) +
   geom_col(alpha = 0.65, 
            fill = "darkgreen") +
-  labs(title = "Variables Relacionadas con la Cantidad Gastada",
+  labs(title = "Variables Relacionadas con la Cantidad Gastada por Cliente",
        subtitle = "Modelo XG Boost Regresión",
        x = "Importancia",
        y = NULL,
@@ -288,7 +302,7 @@ dt_02 <-
 
 
 ## train / test split
-set.seed(423)
+set.seed(4423)
 clv_class_split <- 
   initial_split(dt_02, 
                 strata = spend_90_flag)
@@ -310,11 +324,11 @@ clv_class_recipe <-
          data = clv_class_train) |> 
   update_role(customer_id, new_role = "id") |> 
   update_role(spend_90_total, new_role = "intent") |> 
-  step_normalize(all_numeric_predictors())
+  step_scale(all_numeric_predictors())
 
 
 # cross validation
-set.seed(232)
+set.seed(3232)
 clv_class_folds <- 
   vfold_cv(clv_class_train, 
            strata = spend_90_flag)
@@ -408,26 +422,35 @@ dt_predictions <-
 
 # visualización de la predicción de todos los clientes
 dt_predictions |> 
+  filter(difer < 20) |> 
   ggplot(aes(x = frequency, 
              y = prob_purchase, 
              color = difer)) +
-  geom_point(alpha = 0.25)
+  geom_point(alpha = 0.25) +
+  labs(title = "¿En Qué Clientes Enfocar los Esfuerzos de Venta",
+       subtitle = "Clientes que pueden repetir compra",
+       x = "Frecuencia",
+       y = "Probabilidad de compra",
+       caption = "Fuente: CDNOW data <br>
+       Modelaje y visualización: Juan L.Bretón, PMP") +
+  theme_breton()
+
+plotly::ggplotly()
 
 
 # clientes con la más alta probabilidad de comprar en los
 # siguientes 90 días
 dt_predictions |> 
-  arrange(desc(prob_purchase))
+  arrange(desc(prob_purchase)) |> 
+  filter(spend_90_flag == 0)
 
 
 # clientes que han comprado recientemente pero que tienen
 # pocas probabilidades de volver a comprar
 dt_predictions |> 
-  filter(recency > -100 & prob_purchase < 0.4) |> 
+  filter(recency > -90 & prob_purchase < 0.2) |> 
   arrange(prob_purchase) 
 
-dt_predictions |> 
-  summary(prob_purchase)
 
 # clientes con alta cantidad pero que no han hecho compra
 dt_predictions |> 
