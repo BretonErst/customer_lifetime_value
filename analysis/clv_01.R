@@ -255,7 +255,7 @@ show_best(clv_spend_tuned, metric = "rmse")
 # final fit
 clv_spend_fit <- 
   clv_spend_wf |> 
-  finalize_workflow(select_best(clv_spend_tuned, "rmse")) |> 
+  finalize_workflow(select_best(clv_spend_tuned, metric = "rmse")) |> 
   last_fit(clv_spend_split)
 
 # métricas del final fit
@@ -266,12 +266,18 @@ clv_spend_fit |>
 clv_spend_model <- 
   extract_workflow(clv_spend_fit)
 
+write_rds(clv_spend_model, "clv_spend_modelo.rds")
+
+mod_reg <- read_rds("clv_spend_modelo.rds")
+
 # predicción con nuevos datos
 new <- 
   dt_01 |> 
   slice_sample(n = 5)
 
 predict(clv_spend_model, new_data = new)
+
+predict(mod_reg, new_data = new)
 
 
 # importancia de variables
@@ -363,7 +369,7 @@ show_best(clv_class_tuned, metric = "roc_auc")
 # final fit
 clv_class_fit <- 
   clv_class_wf |> 
-  finalize_workflow(select_best(clv_class_tuned, "roc_auc")) |> 
+  finalize_workflow(select_best(clv_class_tuned, metric = "roc_auc")) |> 
   last_fit(clv_class_split)
 
 # métricas del final fit
@@ -374,12 +380,17 @@ clv_class_fit |>
 clv_class_model <- 
   extract_workflow(clv_class_fit)
 
+write_rds(clv_class_model, "clv_class_modelo.rds")
+
+mod_clas <- read_rds("clv_class_modelo.rds")
+
 # predicción en nuevos datos
 new <- 
   dt_01 |> 
   slice_sample(n = 5)
 
-predict(clv_class_model, new_data = new, type = "prob")
+predict(mod_clas,
+        new_data = new, type = "prob")
 
 
 # importance
